@@ -132,8 +132,8 @@ sensor.start()
 # ==========================================================
 # 3. ✏️ 여기 2줄만 학생이 직접 수정하세요!
 # ==========================================================
-WIFI_SSID = "학교 와이파이 이름 입력"   # 예시: "Danggok_WiFi"
-WIFI_PW   = "학교 와이파이 비밀번호 입력" # 예시: "1234abcd"
+WIFI_SSID = "senWiFi_Free_sky"   # 예시: "Danggok_WiFi"
+WIFI_PW   = "sudo25sky@" # 예시: "1234abcd"
 
 # 와이파이 연결
 wlan = network.WLAN(network.STA_IF)
