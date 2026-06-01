@@ -1,86 +1,133 @@
-🕯️ 단계별 난이도
-code
-복사
-1단계 : 촛불 1개 (LED 2개)
-2단계 : 촛불 3개 (LED 6개)
-3단계 : 촛불 5개 (LED 10개 전부!)
+import machine
+import time
+import struct
+import sys
+import select
 
-단계가 올라갈수록
-더 세게 불어야 꺼짐!
+# 1. SCD30 센서 드라이버
+class SCD30:
+    def __init__(self, i2c, addr=0x61):
+        self.i2c = i2c
+        self.addr = addr
+        self.crc_table = [self._generate_crc(i) for i in range(256)]
 
-모든 단계 클리어
-→ 🌈 무지개 LED 축하 효과!
-⏱️ 제한 시간
-code
-복사
-각 단계마다 제한 시간 존재!
+    def _generate_crc(self, crc):
+        for _ in range(8):
+            if crc & 0x80: crc = (crc << 1) ^ 0x31
+            else: crc = (crc << 1)
+            crc &= 0xFF
+        return crc
 
-1단계 : 10초 안에 꺼야 함
-2단계 : 8초 안에 꺼야 함
-3단계 : 5초 안에 꺼야 함
+    def _check_crc(self, arr):
+        crc = 0xff
+        for i in range(2):
+            crc ^= arr[i]
+            crc = self.crc_table[crc]
+        if crc != arr[2]: raise Exception("CRC Error")
 
-시간 초과
-→ 🔴 LED 전부 빨갛게 깜빡
-→ "실패! 다시 도전하세요!"
+    def read_measurement(self):
+        try:
+            self.i2c.writeto(self.addr, b'\x03\x00')
+            time.sleep_ms(30)
+            m = self.i2c.readfrom(self.addr, 18)
+            for i in range(0, 18, 3): self._check_crc(m[i:i+3])
+            co2 = struct.unpack('>f', bytes([m[0],m[1],m[3],m[4]]))[0]
+            temp = struct.unpack('>f', bytes([m[6],m[7],m[9],m[10]]))[0]
+            hum = struct.unpack('>f', bytes([m[12],m[13],m[15],m[16]]))[0]
+            return co2, temp, hum
+        except: return 0.0, 0.0, 0.0
 
-성공
-→ 🌈 무지개 효과 + 다음 단계!
-🏆 점수 시스템
-code
-복사
-빨리 끌수록 높은 점수!
+    def start(self):
+        self.i2c.writeto(self.addr, b'\x00\x10\x00\x00\x81')
 
-남은 시간 × 10 = 점수
-1단계 성공 → +100점
-2단계 성공 → +200점
-3단계 성공 → +300점
+    def ready(self):
+        try:
+            self.i2c.writeto(self.addr, b'\x02\x02')
+            return struct.unpack('>H', self.i2c.readfrom(self.addr, 3)[:2])[0] == 1
+        except: return False
 
-웹에서 점수판 표시
-최고 기록 저장!
-💨 촛불 흔들림 효과
-code
-복사
-숨을 약하게 불면
-촛불이 흔들리는 효과!
+# 2. 하드웨어 설정
+i2c_bus = machine.I2C(1, sda=machine.Pin(6), scl=machine.Pin(7), freq=50000)
+mq2_sensor = machine.ADC(26)
+LED = machine.Pin(16, machine.Pin.OUT)
 
-CO2 살짝 올라감
-→ LED가 깜빡깜빡 (촛불 흔들림)
+sensor = SCD30(i2c_bus)
+sensor.start()
 
-CO2 많이 올라감
-→ LED가 하나씩 꺼짐!
+# 설정값
+STUDY_TIME = 50 * 60 # 초 단위
+STRETCH_TIME = 10 * 60
+weather_mode = "1" # 기본값: 맑음
+weather_names = {"1": "맑음☀️", "2": "황사😷", "3": "비☔", "4": "겨울❄️"}
 
-CO2 엄청 올라감
-→ 한번에 확 꺼짐!
-🌈 최종 연출
-code
-복사
-게임 시작
-→ LED 하나씩 켜지며 촛불 등장
+is_study = True
+start_time = time.time()
 
-촛불 흔들림
-→ 주황 + 노랑 깜빡깜빡
+print("="*50)
+print("당곡고 집중도 방어 시스템 가동")
+print("날씨 변경 방법: Shell창에 숫자 입력 후 Enter")
+print("1:맑음, 2:황사, 3:비, 4:겨울")
+print("="*50)
 
-촛불 꺼질 때
-→ 하나씩 스르륵 꺼짐
+while True:
+    now_ts = time.time()
+    
+    # 키보드 입력 확인 (날씨 변경용 - 비차단식)
+    if select.select([sys.stdin], [], [], 0)[0]:
+        ch = sys.stdin.read(1)
+        if ch in ["1", "2", "3", "4"]:
+            weather_mode = ch
+            print(f"\n[설정 변경] 날씨가 '{weather_names[ch]}'로 변경되었습니다.")
 
-전부 꺼지면
-→ 🌈 무지개 폭죽 효과!
+    # 센서 데이터 수집
+    temp, hum, co2, di = 0.0, 0.0, 0.0, 0.0
+    if sensor.ready():
+        co2, temp, hum = sensor.read_measurement()
+        di = 0.81 * temp + 0.01 * hum * (0.99 * temp - 14.3) + 46.3
+    gas = mq2_sensor.read_u16()
 
-실패하면
-→ 🔴 빨강 번쩍 + 처음부터!
-웹 화면 구성
-code
-복사
-🕯️ 촛불 끄기 게임
+    # 타이머 로직
+    elapsed = now_ts - start_time
+    limit = STUDY_TIME if is_study else STRETCH_TIME
+    if elapsed >= limit:
+        is_study = not is_study
+        start_time = now_ts
+        print("\n" + "!"*30)
+        print("모드가 변경되었습니다!")
+        print("!"*30 + "\n")
 
-[      3단계      ]
-[  ⏱️ 남은시간 5초  ]
-[  🏆 점수 : 450  ]
+    # 상태 판단 및 출력
+    rem_min = (limit - elapsed) // 60
+    rem_sec = (limit - elapsed) % 60
+    
+    print(f"\r[{'공부' if is_study else '휴식'}] {int(rem_min):02d}:{int(rem_sec):02d} | DI:{di:.1f} | CO2:{int(co2)} | 가스:{gas} | 날씨:{weather_names[weather_mode]}", end="")
 
-🕯️🕯️🕯️🕯️🕯️
-(남은 촛불 이모지)
+    # LED 제어 및 안내 메시지
+    if not is_study:
+        # 휴식 모드: 빠르게 깜빡임
+        LED.value(int(time.ticks_ms() / 100) % 2)
+        if int(elapsed) % 60 == 0: # 1분마다 안내
+            print("\n[안내] 스트레칭 시간입니다! 자리에서 일어나 몸을 푸세요.")
+    else:
+        # 공부 모드 환경 분석
+        is_bad = (di >= 75.0 or co2 >= 1000 or gas >= 25000)
+        if is_bad:
+            LED.value(int(time.ticks_ms() / 500) % 2) # 경고: 천천히 깜빡임
+            
+            # 날씨별 해결책 출력 (10초마다 한 번씩만 출력되게 조절)
+            if int(elapsed) % 10 == 0:
+                print("\n" + "-"*30)
+                print(f"[경고] 집중 환경이 나쁩니다! (날씨: {weather_names[weather_mode]})")
+                if weather_mode == "1": # 맑음
+                    print("👉 창문을 활짝 열어 환기하고 불쾌지수를 낮추세요!")
+                elif weather_mode == "2": # 황사
+                    print("👉 창문을 1cm만 열어 살짝 환기하고 에어컨을 켜세요!")
+                elif weather_mode == "3": # 비
+                    print("👉 창문을 닫고 에어컨 제습 모드를 가동하세요!")
+                elif weather_mode == "4": # 겨울
+                    print("👉 너무 추우니 2분간만 짧게 환기하고 문을 닫으세요!")
+                print("-"*30)
+        else:
+            LED.value(1) # 최적: 계속 켜짐
 
-[💨 CO2 변화량 게이지]
-█████░░░░░
-
-최고기록 : 850점
+    time.sleep(0.1)
