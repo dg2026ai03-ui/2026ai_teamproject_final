@@ -73,8 +73,8 @@ sensor.start()
 # ==========================================================
 # 3. 와이파이 설정
 # ==========================================================
-WIFI_SSID = "여기에 와이파이이름"
-WIFI_PW   = "여기에 비밀번호"
+WIFI_SSID = "senWiFi_Free_sky"
+WIFI_PW   = "sudo25sky@"
 
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
