@@ -3,6 +3,7 @@ import time
 import struct
 import network
 import socket
+import math
 from neopixel import NeoPixel
 
 # ==========================================================
@@ -73,8 +74,8 @@ sensor.start()
 # ==========================================================
 # 3. 와이파이 설정
 # ==========================================================
-WIFI_SSID = "senWiFi_Free_sky"
-WIFI_PW   = "sudo25sky@"
+WIFI_SSID = "여기에 와이파이이름"
+WIFI_PW   = "여기에 비밀번호"
 
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
@@ -105,11 +106,9 @@ STRETCH_TIME     = 10 * 60 * 1000
 is_study         = True
 prev_ms          = time.ticks_ms()
 selected_weather = "sunny"
-
-# ✅ 그래프용 CO2 기록 리스트 (최근 20개만 유지)
-co2_history    = []
-time_history   = []
-start_ts       = time.time()
+co2_history      = []
+time_history     = []
+start_ts         = time.time()
 
 # ==========================================================
 # 5. LED 제어
@@ -141,14 +140,11 @@ def update_sensors():
     global co2_history, time_history
 
     now = time.ticks_ms()
-
     if sensor.ready():
         result = sensor.read_measurement()
         if result is not None:
             co2, temp, hum = result
             di = 0.81 * temp + 0.01 * hum * (0.99 * temp - 14.3) + 46.3
-
-            # ✅ CO2 기록 저장 (최근 20개만 유지)
             elapsed_sec = time.time() - start_ts
             co2_history.append(int(co2))
             time_history.append(int(elapsed_sec))
@@ -157,7 +153,6 @@ def update_sensors():
                 time_history.pop(0)
 
     gas = mq2_sensor.read_u16()
-
     elapsed = time.ticks_diff(now, prev_ms)
     if is_study and elapsed >= STUDY_TIME:
         is_study = False
@@ -167,60 +162,96 @@ def update_sensors():
         is_study = True
         prev_ms  = now
         print("공부 시간!")
-
     update_led(di, co2, gas, is_study)
 
 # ==========================================================
-# 7. 환기 회복 시간 예측 함수
-# ✅ 물질전달 1차 감쇄 공식 활용
-# t = -ln((목표농도 - 외부농도) / (현재농도 - 외부농도)) / k
-# k = 0.03 (일반 교실 환기 속도 상수 가정)
+# 7. 환기 회복 시간 예측
 # ==========================================================
 def calc_recovery_time(current_co2):
-    target  = 1000.0   # 목표 CO2 농도 (ppm)
-    ambient = 400.0    # 외부 대기 CO2 농도 (ppm)
-    k       = 0.03     # 환기 속도 상수 (1/분)
-
+    target  = 1000.0
+    ambient = 400.0
+    k       = 0.03
     if current_co2 <= target:
-        return 0  # 이미 쾌적한 상태
-
-    import math
+        return 0
     ratio = (target - ambient) / (current_co2 - ambient)
     if ratio <= 0:
-        return 99  # 계산 불가 시 최대값 반환
+        return 99
     t_min = -math.log(ratio) / k
     return max(1, int(t_min))
 
 # ==========================================================
-# 8. 웹페이지 HTML
+# 8. 환경 상태 판단
 # ==========================================================
-def get_html(di, co2, gas, temp, hum, timer_str, guide, weather, pointer_px, recovery_min):
+def get_status(di, co2, is_study):
+    if not is_study:
+        return "stretch", "🤸 스트레칭 타임!", "#a78bfa", "자리에서 일어나 몸을 쭉 펴세요!"
+    elif di >= 80 or co2 >= 1500:
+        return "danger", "🔴 매우 나쁨", "#f87171", "즉시 환기가 필요해요!"
+    elif di >= 75 or co2 >= 1000:
+        return "warning", "🟡 주의", "#fbbf24", "집중력이 떨어질 수 있어요!"
+    else:
+        return "good", "🟢 쾌적해요!", "#34d399", "공부하기 딱 좋은 환경이에요!"
 
-    # ✅ 그래프 데이터를 JavaScript 배열 문자열로 변환
+# ==========================================================
+# 9. HTML 생성
+# ==========================================================
+def get_html(di, co2, gas, temp, hum, timer_str, guide,
+             weather, pointer_px, recovery_min, is_study):
+
     co2_data  = str(co2_history)
     time_data = str(time_history)
+
+    status_key, status_label, status_color, status_desc = get_status(di, co2, is_study)
+
+    # 집중력 점수 계산
+    score = 100
+    if di > 70:  score -= int((di - 70) * 4)
+    if co2 > 800: score -= int((co2 - 800) * 0.05)
+    score = max(0, min(100, score))
+
+    if score >= 80:
+        score_color = "#34d399"
+        score_emoji = "😊"
+    elif score >= 50:
+        score_color = "#fbbf24"
+        score_emoji = "😐"
+    else:
+        score_color = "#f87171"
+        score_emoji = "😵"
+
+    # 회복 시간 안내
+    if recovery_min == 0:
+        recovery_text = "✅ 이미 쾌적한 환경이에요!"
+        recovery_color = "#34d399"
+    else:
+        recovery_text = f"🪟 창문 열면 약 {recovery_min}분 후 쾌적해져요!"
+        recovery_color = "#fbbf24"
 
     # 날씨 버튼
     weather_buttons = ""
     weathers = [
-        ("sunny", "☀️ 쨍쨍"),
-        ("dusty", "😷 황사"),
-        ("rainy", "☔ 비옴"),
-        ("cold",  "❄️ 겨울")
+        ("sunny", "☀️", "맑음"),
+        ("dusty", "😷", "황사"),
+        ("rainy", "☔", "비"),
+        ("cold",  "❄️", "겨울")
     ]
-    for key, label in weathers:
+    for key, icon, label in weathers:
         if key == weather:
-            weather_buttons += f'<a href="/?w={key}" class="p-3 rounded-xl bg-emerald-900 border-2 border-emerald-400 font-bold text-center text-sm text-emerald-300">{label}</a>'
+            weather_buttons += f'''
+            <a href="/?w={key}"
+               style="background:#ecfdf5; border:2px solid #34d399; color:#065f46;"
+               class="flex flex-col items-center p-3 rounded-2xl font-bold text-sm cursor-pointer">
+                <span class="text-2xl">{icon}</span>
+                <span class="mt-1">{label}</span>
+            </a>'''
         else:
-            weather_buttons += f'<a href="/?w={key}" class="p-3 rounded-xl bg-slate-800 font-bold text-center text-sm hover:bg-slate-700">{label}</a>'
-
-    # 회복 시간 안내 문구
-    if recovery_min == 0:
-        recovery_text = "🟢 이미 쾌적한 환경이에요!"
-        recovery_color = "#10b981"
-    else:
-        recovery_text = f"🪟 지금 창문 열면 약 <b>{recovery_min}분 후</b> 쾌적해져요!"
-        recovery_color = "#f59e0b"
+            weather_buttons += f'''
+            <a href="/?w={key}"
+               style="background:#f8fafc; border:2px solid #e2e8f0; color:#64748b;"
+               class="flex flex-col items-center p-3 rounded-2xl font-bold text-sm cursor-pointer hover:border-emerald-300">
+                <span class="text-2xl">{icon}</span>
+                <span class="mt-1">{label}</span>
+            </a>'''
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -232,148 +263,262 @@ def get_html(di, co2, gas, temp, hum, timer_str, guide, weather, pointer_px, rec
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-body {{ font-family: sans-serif; }}
-.gauge-bar {{
-    background: linear-gradient(to top, #10b981 0%, #facc15 50%, #f43f5e 100%);
-    width: 36px; height: 320px; border-radius: 18px;
-    box-shadow: inset 0 2px 8px rgba(0,0,0,0.5);
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+    background: linear-gradient(135deg, #f0fdf4 0%, #eff6ff 100%);
+    min-height: 100vh;
+    padding: 24px 16px;
+  }}
+  .card {{
+    background: white;
+    border-radius: 24px;
+    padding: 24px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+    border: 1px solid #f1f5f9;
+  }}
+  .label {{
+    font-size: 11px;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }}
+  .big-num {{
+    font-size: 48px;
+    font-weight: 900;
+    line-height: 1;
+  }}
+  .badge {{
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+  }}
+  .gauge-wrap {{
+    background: linear-gradient(to top, #34d399, #fbbf24, #f87171);
+    width: 20px;
+    height: 200px;
+    border-radius: 999px;
     position: relative;
-}}
-#pointer {{ position: absolute; left: 46px; }}
+  }}
+  .gauge-needle {{
+    position: absolute;
+    right: -36px;
+    width: 32px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }}
+  .score-ring {{
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border: 8px solid;
+    margin: 0 auto;
+  }}
 </style>
 </head>
-<body class="bg-slate-950 text-slate-200 min-h-screen flex flex-col items-center p-6">
+<body>
 
-<header class="w-full max-w-4xl flex justify-between items-center mb-8">
-    <h1 class="text-2xl font-black text-emerald-400">🧠 STUDY SHIELD</h1>
-    <span class="text-xs text-slate-500 font-bold">3초마다 자동 갱신</span>
-</header>
+<!-- 헤더 -->
+<div style="max-width:900px; margin:0 auto;">
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 style="font-size:22px; font-weight:900; color:#1e293b;">
+        🧠 Study Shield
+      </h1>
+      <p style="font-size:12px; color:#94a3b8; margin-top:2px;">
+        당곡고등학교 · 3초마다 자동 갱신
+      </p>
+    </div>
+    <!-- 현재 상태 배지 -->
+    <div class="badge" style="background:{status_color}22; color:{status_color}; font-size:14px;">
+      {status_label}
+    </div>
+  </div>
 
-<div class="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-4xl">
+  <!-- 상태 안내 배너 -->
+  <div class="card mb-4" style="background:{status_color}11; border:1.5px solid {status_color}44;">
+    <p style="color:{status_color}; font-weight:700; font-size:15px;">{status_desc}</p>
+    <p style="color:#64748b; font-size:13px; margin-top:4px;">{guide}</p>
+  </div>
 
-    <!-- 날씨 선택 + 가이드 -->
-    <div class="bg-slate-900 border border-slate-800 p-6 rounded-3xl flex flex-col gap-6">
-        <div>
-            <h3 class="text-xs font-bold text-slate-500 mb-4 uppercase">바깥 날씨 선택</h3>
-            <div class="grid grid-cols-2 gap-2">{weather_buttons}</div>
-        </div>
-        <div>
-            <h3 class="text-xs font-bold text-emerald-500 mb-2 uppercase">맞춤 처방</h3>
-            <p class="text-slate-300 font-medium leading-relaxed text-sm">{guide}</p>
-        </div>
-        <!-- ✅ 환기 회복 시간 예측 -->
-        <div class="bg-slate-800 rounded-2xl p-4">
-            <h3 class="text-xs font-bold text-slate-500 mb-2 uppercase">⏱️ 환기 회복 예측</h3>
-            <p class="font-bold text-sm" style="color: {recovery_color};">{recovery_text}</p>
-            <p class="text-[10px] text-slate-600 mt-1">물질전달 1차 감쇄 공식 기반 계산</p>
-        </div>
+  <!-- 메인 그리드 -->
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;" class="mb-4">
+
+    <!-- 집중력 점수 -->
+    <div class="card flex flex-col items-center justify-center" style="min-height:180px;">
+      <div class="label">집중력 점수</div>
+      <div class="score-ring" style="border-color:{score_color};">
+        <span style="font-size:36px;">{score_emoji}</span>
+        <span style="font-size:22px; font-weight:900; color:{score_color};">{score}점</span>
+      </div>
     </div>
 
     <!-- 불쾌지수 게이지 -->
-    <div class="bg-slate-900 border border-slate-800 p-8 rounded-3xl flex flex-col items-center">
-        <span class="text-xs font-bold text-slate-500 mb-6 uppercase">불쾌지수(DI) 게이지</span>
-        <div class="relative flex items-center h-[320px]">
-            <div class="gauge-bar"></div>
-            <div id="pointer" style="top: {pointer_px}px;">
-                <div class="flex items-center gap-2">
-                    <span class="text-white text-xl">◀</span>
-                    <div class="bg-slate-800 border border-slate-700 px-3 py-1 rounded-xl shadow-xl">
-                        <span class="text-2xl font-black">{di:.1f}</span>
-                    </div>
-                </div>
-            </div>
+    <div class="card flex flex-col items-center justify-center" style="min-height:180px;">
+      <div class="label">불쾌지수 (DI)</div>
+      <div style="display:flex; align-items:center; gap:16px; margin-top:12px;">
+        <div style="display:flex; flex-direction:column; justify-content:space-between; height:200px; font-size:10px; color:#cbd5e1; text-align:right;">
+          <span>85</span>
+          <span>75</span>
+          <span>68</span>
+          <span>60</span>
         </div>
-        <div class="mt-8 text-5xl font-mono font-black text-emerald-400">{timer_str}</div>
+        <div class="gauge-wrap">
+          <div class="gauge-needle" style="top:{pointer_px}px;">
+            <span style="color:#1e293b; font-size:10px;">◀</span>
+            <span style="font-weight:900; font-size:15px; color:#1e293b;">{di:.1f}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- 센서 수치 -->
-    <div class="flex flex-col gap-4">
-        <div class="bg-slate-900 border border-slate-800 p-6 rounded-3xl">
-            <span class="text-xs font-bold text-slate-500 uppercase">이산화탄소 CO2</span>
-            <div class="text-5xl font-black mt-1">{int(co2)}</div>
-            <span class="text-[10px] text-slate-600">ppm | 기준: 1,000ppm 초과 시 주의</span>
-        </div>
-        <div class="bg-slate-900 border border-slate-800 p-6 rounded-3xl">
-            <span class="text-xs font-bold text-slate-500 uppercase">가스 오염도 MQ-2</span>
-            <div class="text-5xl font-black mt-1">{gas}</div>
-        </div>
-        <div class="flex gap-3">
-            <div class="flex-1 bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center">
-                <span class="text-[10px] text-slate-500 font-bold">온도</span>
-                <div class="font-black text-lg mt-1">{temp:.1f}°C</div>
-            </div>
-            <div class="flex-1 bg-slate-900 border border-slate-800 p-4 rounded-2xl text-center">
-                <span class="text-[10px] text-slate-500 font-bold">습도</span>
-                <div class="font-black text-lg mt-1">{hum:.1f}%</div>
-            </div>
-        </div>
+    <!-- 타이머 -->
+    <div class="card flex flex-col items-center justify-center" style="min-height:180px;">
+      <div class="label">{'📚 공부 중' if is_study else '🤸 휴식 중'}</div>
+      <div style="font-size:44px; font-weight:900; color:#6366f1; font-family:monospace; margin-top:8px;">
+        {timer_str}
+      </div>
+      <div style="font-size:11px; color:#94a3b8; margin-top:8px;">
+        {'남은 공부 시간' if is_study else '남은 휴식 시간'}
+      </div>
     </div>
-</div>
+  </div>
 
-<!-- ✅ CO2 실시간 그래프 -->
-<div class="w-full max-w-4xl mt-8 bg-slate-900 border border-slate-800 p-6 rounded-3xl">
-    <h3 class="text-xs font-bold text-slate-500 mb-4 uppercase">📈 CO2 실시간 변화 그래프</h3>
-    <canvas id="co2Chart" height="80"></canvas>
+  <!-- 센서 수치 그리드 -->
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px;" class="mb-4">
+
+    <!-- CO2 -->
+    <div class="card">
+      <div class="label">💨 CO2</div>
+      <div class="big-num" style="color:{'#f87171' if co2>=1000 else '#1e293b'};">
+        {int(co2)}
+      </div>
+      <div style="font-size:11px; color:#94a3b8; margin-top:4px;">ppm</div>
+    </div>
+
+    <!-- 온도 -->
+    <div class="card">
+      <div class="label">🌡️ 온도</div>
+      <div class="big-num" style="color:#f97316;">{temp:.1f}</div>
+      <div style="font-size:11px; color:#94a3b8; margin-top:4px;">°C</div>
+    </div>
+
+    <!-- 습도 -->
+    <div class="card">
+      <div class="label">💧 습도</div>
+      <div class="big-num" style="color:#38bdf8;">{hum:.1f}</div>
+      <div style="font-size:11px; color:#94a3b8; margin-top:4px;">%</div>
+    </div>
+
+    <!-- 가스 -->
+    <div class="card">
+      <div class="label">🏭 가스 MQ2</div>
+      <div class="big-num" style="color:{'#f87171' if gas>=25000 else '#1e293b'}; font-size:32px;">
+        {gas}
+      </div>
+    </div>
+  </div>
+
+  <!-- 날씨 + 환기 예측 -->
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;" class="mb-4">
+
+    <!-- 날씨 선택 -->
+    <div class="card">
+      <div class="label">⛅ 바깥 날씨 선택</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px;">
+        {weather_buttons}
+      </div>
+    </div>
+
+    <!-- 환기 회복 예측 -->
+    <div class="card" style="background:{recovery_color}11; border:1.5px solid {recovery_color}44;">
+      <div class="label">⏱️ 환기 회복 예측</div>
+      <p style="font-weight:700; font-size:16px; color:{recovery_color}; margin-top:10px;">
+        {recovery_text}
+      </p>
+      <p style="font-size:11px; color:#94a3b8; margin-top:8px; line-height:1.6;">
+        물질전달 1차 감쇄 공식 기반<br>
+        (목표: 1,000ppm / 외부: 400ppm)
+      </p>
+    </div>
+  </div>
+
+  <!-- CO2 그래프 -->
+  <div class="card">
+    <div class="label">📈 CO2 실시간 변화 그래프</div>
+    <canvas id="co2Chart" height="70" style="margin-top:12px;"></canvas>
+  </div>
+
 </div>
 
 <script>
-// 피코 W에서 넘겨준 데이터
 const co2Data  = {co2_data};
 const timeData = {time_data};
-
 const ctx = document.getElementById('co2Chart').getContext('2d');
 new Chart(ctx, {{
-    type: 'line',
-    data: {{
-        labels: timeData.map(t => t + '초'),
-        datasets: [{{
-            label: 'CO2 (ppm)',
-            data: co2Data,
-            borderColor: '#4ea8de',
-            backgroundColor: 'rgba(78,168,222,0.1)',
-            borderWidth: 2,
-            pointRadius: 3,
-            pointBackgroundColor: '#4ea8de',
-            tension: 0.4,
-            fill: true
-        }},
-        {{
-            label: '경고 기준 (1000ppm)',
-            data: Array(co2Data.length).fill(1000),
-            borderColor: '#f43f5e',
-            borderWidth: 1,
-            borderDash: [5, 5],
-            pointRadius: 0,
-            fill: false
-        }}]
+  type: 'line',
+  data: {{
+    labels: timeData.map(t => t + '초'),
+    datasets: [
+      {{
+        label: 'CO2 (ppm)',
+        data: co2Data,
+        borderColor: '#6366f1',
+        backgroundColor: 'rgba(99,102,241,0.08)',
+        borderWidth: 2.5,
+        pointRadius: 4,
+        pointBackgroundColor: '#6366f1',
+        tension: 0.4,
+        fill: true
+      }},
+      {{
+        label: '경고 기준 (1000ppm)',
+        data: Array(co2Data.length).fill(1000),
+        borderColor: '#f87171',
+        borderWidth: 1.5,
+        borderDash: [6, 4],
+        pointRadius: 0,
+        fill: false
+      }}
+    ]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{
+      legend: {{
+        labels: {{ color: '#64748b', font: {{ size: 11, weight: 'bold' }} }}
+      }}
     }},
-    options: {{
-        responsive: true,
-        plugins: {{
-            legend: {{
-                labels: {{ color: '#94a3b8', font: {{ size: 11 }} }}
-            }}
-        }},
-        scales: {{
-            x: {{
-                ticks: {{ color: '#475569', maxTicksLimit: 10 }},
-                grid:  {{ color: '#1e293b' }}
-            }},
-            y: {{
-                ticks: {{ color: '#475569' }},
-                grid:  {{ color: '#1e293b' }},
-                min: 300,
-                suggestedMax: 1500
-            }}
-        }}
+    scales: {{
+      x: {{
+        ticks: {{ color: '#94a3b8', maxTicksLimit: 8 }},
+        grid:  {{ color: '#f1f5f9' }}
+      }},
+      y: {{
+        ticks: {{ color: '#94a3b8' }},
+        grid:  {{ color: '#f1f5f9' }},
+        min: 300,
+        suggestedMax: 1500
+      }}
     }}
+  }}
 }});
 </script>
 
 </body></html>"""
 
 # ==========================================================
-# 9. 웹서버 실행
+# 10. 웹서버 실행
 # ==========================================================
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -399,25 +544,24 @@ while True:
             rem       = max(0, ((STUDY_TIME if is_study else STRETCH_TIME) - elapsed) // 1000)
             timer_str = f"{int(rem//60):02d}:{int(rem%60):02d}"
 
-            pointer_px = int(320 - ((di - 60) * (320 / 25))) - 15
-            pointer_px = max(-15, min(305, pointer_px))
+            pointer_px = int(200 - ((di - 60) * (200 / 25))) - 12
+            pointer_px = max(-12, min(188, pointer_px))
 
-            # ✅ 환기 회복 시간 계산
             recovery_min = calc_recovery_time(co2)
 
             bad = (di >= 75.0 or co2 >= 1000 or gas >= 25000)
             if not is_study:
-                guide = "🧘 스트레칭 시간! 자리에서 일어나 몸을 움직이세요."
+                guide = "자리에서 일어나 몸을 움직이세요! 10분 후 공부 시간이 시작돼요."
             elif bad:
-                if   selected_weather == "sunny": guide = "☀️ 창문을 활짝 열어 환기하세요!"
-                elif selected_weather == "dusty": guide = "😷 창문은 1cm만 열고 에어컨을 켜세요!"
-                elif selected_weather == "rainy": guide = "☔ 창문을 닫고 에어컨 제습 모드를 켜세요!"
-                else:                             guide = "❄️ 2분만 짧게 환기하고 문을 닫으세요!"
+                if   selected_weather == "sunny": guide = "창문을 활짝 열어 환기하세요!"
+                elif selected_weather == "dusty": guide = "창문은 1cm만 열고 에어컨을 켜세요!"
+                elif selected_weather == "rainy": guide = "창문을 닫고 에어컨 제습 모드를 켜세요!"
+                else:                             guide = "2분만 짧게 환기하고 문을 닫으세요!"
             else:
-                guide = "🟢 집중하기 아주 좋은 환경입니다!"
+                guide = "최적의 공부 환경이에요! 이 상태를 유지해보세요 😊"
 
             html = get_html(di, co2, gas, temp, hum, timer_str, guide,
-                           selected_weather, pointer_px, recovery_min)
+                           selected_weather, pointer_px, recovery_min, is_study)
             conn.send("HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n")
             conn.send(html)
         except:
