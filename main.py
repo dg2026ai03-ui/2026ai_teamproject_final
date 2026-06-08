@@ -227,13 +227,13 @@ def get_html(di, co2, gas, temp, hum, timer_str, guide,
         recovery_text = f"🪟 창문 열면 약 {recovery_min}분 후 쾌적해져요!"
         recovery_color = "#fbbf24"
 
-    # 날씨 버튼
+    # 날씨 버튼 (4개)
     weather_buttons = ""
     weathers = [
         ("sunny", "☀️", "맑음"),
         ("dusty", "😷", "황사"),
         ("rainy", "☔", "비"),
-        ("cold",  "❄️", "겨울")
+        ("snow",  "❄️", "눈")
     ]
     for key, icon, label in weathers:
         if key == weather:
@@ -339,7 +339,6 @@ def get_html(di, co2, gas, temp, hum, timer_str, guide,
         당곡고등학교 · 3초마다 자동 갱신
       </p>
     </div>
-    <!-- 현재 상태 배지 -->
     <div class="badge" style="background:{status_color}22; color:{status_color}; font-size:14px;">
       {status_label}
     </div>
@@ -435,7 +434,7 @@ def get_html(di, co2, gas, temp, hum, timer_str, guide,
     <!-- 날씨 선택 -->
     <div class="card">
       <div class="label">⛅ 바깥 날씨 선택</div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px;">
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:10px;">
         {weather_buttons}
       </div>
     </div>
@@ -538,7 +537,7 @@ while True:
             if   "?w=sunny" in request: selected_weather = "sunny"
             elif "?w=dusty" in request: selected_weather = "dusty"
             elif "?w=rainy" in request: selected_weather = "rainy"
-            elif "?w=cold"  in request: selected_weather = "cold"
+            elif "?w=snow"  in request: selected_weather = "snow"
 
             elapsed   = time.ticks_diff(time.ticks_ms(), prev_ms)
             rem       = max(0, ((STUDY_TIME if is_study else STRETCH_TIME) - elapsed) // 1000)
@@ -556,7 +555,8 @@ while True:
                 if   selected_weather == "sunny": guide = "창문을 활짝 열어 환기하세요!"
                 elif selected_weather == "dusty": guide = "창문은 1cm만 열고 에어컨을 켜세요!"
                 elif selected_weather == "rainy": guide = "창문을 닫고 에어컨 제습 모드를 켜세요!"
-                else:                             guide = "2분만 짧게 환기하고 문을 닫으세요!"
+                elif selected_weather == "snow":  guide = "2분만 짧게 환기하고 문을 닫으세요!"
+                else:                             guide = "창문을 활짝 열어 환기하세요!"
             else:
                 guide = "최적의 공부 환경이에요! 이 상태를 유지해보세요 😊"
 
