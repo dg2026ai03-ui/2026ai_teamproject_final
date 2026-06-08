@@ -6,9 +6,6 @@ import socket
 import math
 from neopixel import NeoPixel
 
-# ==========================================================
-# 1. SCD30 드라이버
-# ==========================================================
 class SCD30:
     def __init__(self, i2c, addr=0x61):
         self.i2c = i2c
@@ -40,19 +37,15 @@ class SCD30:
             temp = struct.unpack('>f', bytes([m[6],m[7],m[9],m[10]]))[0]
             hum  = struct.unpack('>f', bytes([m[12],m[13],m[15],m[16]]))[0]
             return co2, temp, hum
-        except OSError as e:
-            print("I2C 오류:", e)
-            return None
-        except Exception as e:
-            print("센서 오류:", e)
+        except:
             return None
 
     def start(self):
         try:
             self.i2c.writeto(self.addr, b'\x00\x10\x00\x00\x81')
             print("SCD30 시작!")
-        except OSError as e:
-            print("SCD30 시작 실패:", e)
+        except:
+            print("SCD30 시작 실패")
 
     def ready(self):
         try:
@@ -61,9 +54,6 @@ class SCD30:
         except:
             return False
 
-# ==========================================================
-# 2. 하드웨어 설정
-# ==========================================================
 i2c_bus    = machine.I2C(0, sda=machine.Pin(8), scl=machine.Pin(9), freq=50000)
 mq2_sensor = machine.ADC(26)
 NUM_LEDS   = 10
@@ -71,18 +61,20 @@ np         = NeoPixel(machine.Pin(16), NUM_LEDS)
 sensor     = SCD30(i2c_bus)
 sensor.start()
 
-# ==========================================================
-# 3. 와이파이 설정
-# ==========================================================
-WIFI_SSID = "senWiFi_Free_sky"
-WIFI_PW   = "sudo25sky@"
+WIFI_SSID = "enhypengirl"
+WIFI_PW   = "enhypengirl"
 
 wlan = network.WLAN(network.STA_IF)
+wlan.active(False)
+time.sleep(3)
 wlan.active(True)
+time.sleep(3)
+wlan.disconnect()
+time.sleep(2)
 wlan.connect(WIFI_SSID, WIFI_PW)
 
 print("와이파이 연결 중...")
-for _ in range(20):
+for _ in range(30):
     if wlan.isconnected(): break
     time.sleep(1)
     print(".", end="")
@@ -90,511 +82,199 @@ for _ in range(20):
 if wlan.isconnected():
     ip = wlan.ifconfig()[0]
     print("\n연결 성공!")
-    print("=" * 40)
     print("http://" + ip)
-    print("=" * 40)
 else:
     print("\n연결 실패!")
-    ip = "0.0.0.0"
 
-# ==========================================================
-# 4. 전역 변수
-# ==========================================================
 co2, temp, hum, di, gas = 450.0, 24.0, 50.0, 0.0, 0
-STUDY_TIME       = 50 * 60 * 1000
-STRETCH_TIME     = 10 * 60 * 1000
-is_study         = True
-prev_ms          = time.ticks_ms()
-selected_weather = "sunny"
-co2_history      = []
-time_history     = []
-start_ts         = time.time()
+STUDY_TIME   = 50 * 60 * 1000
+STRETCH_TIME = 10 * 60 * 1000
+is_study     = True
+prev_ms      = time.ticks_ms()
+sel_weather  = "sunny"
+co2_hist     = []
 
-# ==========================================================
-# 5. LED 제어
-# ==========================================================
+def fmt_time(sec):
+    mm = int(sec // 60)
+    ss = int(sec % 60)
+    ms = "0" + str(mm) if mm < 10 else str(mm)
+    ss2 = "0" + str(ss) if ss < 10 else str(ss)
+    return ms + ":" + ss2
+
 def update_led(di, co2, gas, is_study):
     now = time.ticks_ms()
     if not is_study:
         val = 150 if (now // 300) % 2 == 0 else 0
-        for i in range(NUM_LEDS):
-            np[i] = (0, 0, val)
+        for i in range(NUM_LEDS): np[i] = (0, 0, val)
     elif di >= 80 or co2 >= 1500 or gas >= 25000:
         val = 150 if (now // 150) % 2 == 0 else 0
-        for i in range(NUM_LEDS):
-            np[i] = (val, 0, 0)
+        for i in range(NUM_LEDS): np[i] = (val, 0, 0)
     elif di >= 75 or co2 >= 1000:
         val = 120 if (now // 500) % 2 == 0 else 0
-        for i in range(NUM_LEDS):
-            np[i] = (val, val, 0)
+        for i in range(NUM_LEDS): np[i] = (val, val, 0)
     else:
-        for i in range(NUM_LEDS):
-            np[i] = (0, 100, 0)
+        for i in range(NUM_LEDS): np[i] = (0, 100, 0)
     np.write()
 
-# ==========================================================
-# 6. 센서 업데이트
-# ==========================================================
 def update_sensors():
-    global co2, temp, hum, di, gas, is_study, prev_ms
-    global co2_history, time_history
-
+    global co2, temp, hum, di, gas, is_study, prev_ms, co2_hist
     now = time.ticks_ms()
     if sensor.ready():
-        result = sensor.read_measurement()
-        if result is not None:
-            co2, temp, hum = result
-            di = 0.81 * temp + 0.01 * hum * (0.99 * temp - 14.3) + 46.3
-            elapsed_sec = time.time() - start_ts
-            co2_history.append(int(co2))
-            time_history.append(int(elapsed_sec))
-            if len(co2_history) > 20:
-                co2_history.pop(0)
-                time_history.pop(0)
-
+        r = sensor.read_measurement()
+        if r:
+            co2, temp, hum = r
+            di = 0.81*temp + 0.01*hum*(0.99*temp-14.3) + 46.3
+            co2_hist.append(int(co2))
+            if len(co2_hist) > 15: co2_hist.pop(0)
     gas = mq2_sensor.read_u16()
-    elapsed = time.ticks_diff(now, prev_ms)
-    if is_study and elapsed >= STUDY_TIME:
-        is_study = False
-        prev_ms  = now
-        print("휴식 시간!")
-    elif not is_study and elapsed >= STRETCH_TIME:
-        is_study = True
-        prev_ms  = now
-        print("공부 시간!")
+    e = time.ticks_diff(now, prev_ms)
+    if is_study and e >= STUDY_TIME:
+        is_study = False; prev_ms = now
+    elif not is_study and e >= STRETCH_TIME:
+        is_study = True; prev_ms = now
     update_led(di, co2, gas, is_study)
 
-# ==========================================================
-# 7. 환기 회복 시간 예측
-# ==========================================================
-def calc_recovery_time(current_co2):
-    target  = 1000.0
-    ambient = 400.0
-    k       = 0.03
-    if current_co2 <= target:
-        return 0
-    ratio = (target - ambient) / (current_co2 - ambient)
-    if ratio <= 0:
-        return 99
-    t_min = -math.log(ratio) / k
-    return max(1, int(t_min))
+def calc_recovery(c):
+    if c <= 1000: return 0
+    r = 600.0 / (c - 400.0)
+    if r <= 0: return 99
+    return max(1, int(-math.log(r) / 0.03))
 
-# ==========================================================
-# 8. 환경 상태 판단
-# ==========================================================
-def get_status(di, co2, is_study):
+def send_page(conn):
     if not is_study:
-        return "stretch", "스트레칭 타임!", "#a78bfa", "자리에서 일어나 몸을 쭉 펴세요!"
+        sc = "#a78bfa"; sl = "휴식중"; sd = "스트레칭 타임!"
     elif di >= 80 or co2 >= 1500:
-        return "danger", "매우 나쁨", "#f87171", "즉시 환기가 필요해요!"
+        sc = "#f87171"; sl = "나쁨"; sd = "즉시 환기하세요!"
     elif di >= 75 or co2 >= 1000:
-        return "warning", "주의", "#fbbf24", "집중력이 떨어질 수 있어요!"
+        sc = "#fbbf24"; sl = "주의"; sd = "환기가 필요해요!"
     else:
-        return "good", "쾌적해요!", "#34d399", "공부하기 딱 좋은 환경이에요!"
+        sc = "#34d399"; sl = "쾌적"; sd = "공부하기 좋아요!"
 
-# ==========================================================
-# 9. HTML 생성
-# ==========================================================
-def get_html(di, co2, gas, temp, hum, timer_str, guide,
-             weather, pointer_px, recovery_min, is_study):
-
-    co2_data  = str(co2_history)
-    time_data = str(time_history)
-
-    status_key, status_label, status_color, status_desc = get_status(di, co2, is_study)
-
-    # 집중력 점수 계산
     score = 100
-    if di > 70:
-        score -= int((di - 70) * 4)
-    if co2 > 800:
-        score -= int((co2 - 800) * 0.05)
+    if di > 70: score -= int((di-70)*4)
+    if co2 > 800: score -= int((co2-800)*0.05)
     score = max(0, min(100, score))
+    if score >= 80: skc = "#34d399"
+    elif score >= 50: skc = "#fbbf24"
+    else: skc = "#f87171"
 
-    if score >= 80:
-        score_color = "#34d399"
-        score_emoji = "^^"
-    elif score >= 50:
-        score_color = "#fbbf24"
-        score_emoji = "-_-"
+    e = time.ticks_diff(time.ticks_ms(), prev_ms)
+    rem = max(0, ((STUDY_TIME if is_study else STRETCH_TIME) - e) // 1000)
+    tstr = fmt_time(rem)
+
+    bad = di >= 75 or co2 >= 1000 or gas >= 25000
+    if not is_study:
+        guide = "10분 휴식 후 공부 시작!"
+    elif bad:
+        if sel_weather == "dusty": guide = "창문 1cm만 열고 에어컨 켜세요!"
+        elif sel_weather == "rainy": guide = "에어컨 제습 모드 켜세요!"
+        elif sel_weather == "snow": guide = "2분만 환기하고 닫으세요!"
+        else: guide = "창문 활짝 열어 환기하세요!"
     else:
-        score_color = "#f87171"
-        score_emoji = "X_X"
+        guide = "최적 환경! 이 상태 유지하세요"
 
-    # 회복 시간 안내
-    if recovery_min == 0:
-        recovery_text = "이미 쾌적한 환경이에요!"
-        recovery_color = "#34d399"
-    else:
-        recovery_text = "창문 열면 약 " + str(recovery_min) + "분 후 쾌적해져요!"
-        recovery_color = "#fbbf24"
+    rec = calc_recovery(co2)
+    if rec == 0: rt = "이미 쾌적해요!"; rc = "#34d399"
+    else: rt = "환기시 약 " + str(rec) + "분 후 쾌적!"; rc = "#fbbf24"
 
-    # 타이머 라벨
-    if is_study:
-        study_label = "공부 중"
-        time_label  = "남은 공부 시간"
-    else:
-        study_label = "휴식 중"
-        time_label  = "남은 휴식 시간"
+    bars = ""
+    if co2_hist:
+        mx = max(max(co2_hist), 1000)
+        for v in co2_hist:
+            h = max(2, int(v/mx*80))
+            c = "#f87171" if v>=1000 else ("#fbbf24" if v>=800 else "#6366f1")
+            bars += "<div style='flex:1;background:" + c + ";height:" + str(h) + "px;border-radius:2px 2px 0 0;margin:0 1px;'></div>"
 
-    # co2 색상
-    if co2 >= 1000:
-        co2_color = "#f87171"
-    else:
-        co2_color = "#1e293b"
+    wlist = [("sunny","sunny","맑음"),("dusty","dusty","황사"),("rainy","rainy","비"),("snow","snow","눈")]
+    wicons = {"sunny":"☀","dusty":"😷","rainy":"🌧","snow":"❄"}
+    wbtns = ""
+    for k, _, lb in wlist:
+        bg = "#ecfdf5" if k==sel_weather else "#f8fafc"
+        bd = "#34d399" if k==sel_weather else "#e2e8f0"
+        wbtns += "<a href='/?w=" + k + "' style='background:" + bg + ";border:2px solid " + bd + ";border-radius:12px;padding:8px;text-align:center;text-decoration:none;font-size:12px;font-weight:700;color:#1e293b;display:block;'>" + wicons[k] + "<br>" + lb + "</a>"
 
-    # 가스 색상
-    if gas >= 25000:
-        gas_color = "#f87171"
-    else:
-        gas_color = "#1e293b"
+    def s(t): conn.sendall(t.encode())
 
-    # 날씨 버튼 생성
-    weather_buttons = ""
-    weathers = [
-        ("sunny", "sunny", "맑음"),
-        ("dusty", "dusty", "황사"),
-        ("rainy", "rainy", "비"),
-        ("snow",  "snow",  "눈")
-    ]
-    weather_icons = {
-        "sunny": "&#9728;",
-        "dusty": "&#128567;",
-        "rainy": "&#9748;",
-        "snow":  "&#10052;"
-    }
-    for key, val, label in weathers:
-        icon = weather_icons[key]
-        if key == weather:
-            bg     = "#ecfdf5"
-            border = "#34d399"
-            color  = "#065f46"
-        else:
-            bg     = "#f8fafc"
-            border = "#e2e8f0"
-            color  = "#64748b"
-        weather_buttons += (
-            '<a href="/?w=' + key + '" '
-            'style="background:' + bg + '; border:2px solid ' + border + '; color:' + color + '; '
-            'display:flex; flex-direction:column; align-items:center; '
-            'padding:12px; border-radius:16px; font-weight:700; '
-            'font-size:13px; cursor:pointer; text-decoration:none;">'
-            '<span style="font-size:28px;">' + icon + '</span>'
-            '<span style="margin-top:6px;">' + label + '</span>'
-            '</a>'
-        )
+    s("HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n")
+    s("<!DOCTYPE html><html><head>")
+    s("<meta charset='UTF-8'>")
+    s("<meta http-equiv='refresh' content='5'>")
+    s("<meta name='viewport' content='width=device-width,initial-scale=1'>")
+    s("<title>Study Shield</title>")
+    s("<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:sans-serif;background:#f0fdf4;padding:12px;}h1{font-size:18px;font-weight:900;color:#1e293b;}.card{background:#fff;border-radius:16px;padding:16px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,0.06);}.lbl{font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:4px;}.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}.g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;}</style>")
+    s("</head><body><div style='max-width:700px;margin:0 auto;'>")
 
-    html = """<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="refresh" content="3">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>당곡고 Study Shield</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<style>
-* { box-sizing:border-box; margin:0; padding:0; }
-body {
-  font-family: sans-serif;
-  background: linear-gradient(135deg, #f0fdf4 0%, #eff6ff 100%);
-  min-height: 100vh;
-  padding: 24px 16px;
-}
-.card {
-  background: white;
-  border-radius: 24px;
-  padding: 24px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.06);
-  border: 1px solid #f1f5f9;
-}
-.label {
-  font-size: 11px;
-  font-weight: 700;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 6px;
-}
-.big-num {
-  font-size: 48px;
-  font-weight: 900;
-  line-height: 1;
-}
-.gauge-wrap {
-  background: linear-gradient(to top, #34d399, #fbbf24, #f87171);
-  width: 20px;
-  height: 200px;
-  border-radius: 999px;
-  position: relative;
-}
-.gauge-needle {
-  position: absolute;
-  right: -60px;
-  width: 56px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.score-ring {
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  border: 8px solid;
-  margin: 0 auto;
-}
-</style>
-</head>
-<body>
-<div style="max-width:900px; margin:0 auto;">
-"""
+    s("<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>")
+    s("<div><h1>Study Shield</h1><p style='font-size:10px;color:#94a3b8;'>당곡고 5초 갱신</p></div>")
+    s("<span style='background:" + sc + "22;color:" + sc + ";padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;'>" + sl + "</span></div>")
 
-    # 헤더
-    html += (
-        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px;">'
-        '<div>'
-        '<h1 style="font-size:22px; font-weight:900; color:#1e293b;">Study Shield</h1>'
-        '<p style="font-size:12px; color:#94a3b8; margin-top:2px;">당곡고등학교 · 3초마다 자동 갱신</p>'
-        '</div>'
-        '<div style="display:inline-block; padding:6px 14px; border-radius:999px; font-size:14px; font-weight:700;'
-        ' background:' + status_color + '22; color:' + status_color + ';">'
-        + status_label +
-        '</div>'
-        '</div>'
-    )
+    s("<div class='card' style='background:" + sc + "11;border:1.5px solid " + sc + "44;'>")
+    s("<p style='color:" + sc + ";font-weight:700;'>" + sd + "</p>")
+    s("<p style='color:#64748b;font-size:12px;margin-top:4px;'>" + guide + "</p></div>")
 
-    # 상태 배너
-    html += (
-        '<div class="card" style="background:' + status_color + '11; border:1.5px solid ' + status_color + '44; margin-bottom:16px;">'
-        '<p style="color:' + status_color + '; font-weight:700; font-size:15px;">' + status_desc + '</p>'
-        '<p style="color:#64748b; font-size:13px; margin-top:4px;">' + guide + '</p>'
-        '</div>'
-    )
+    s("<div class='g3' style='margin-bottom:10px;'>")
+    s("<div class='card' style='text-align:center;'><div class='lbl'>집중력</div>")
+    s("<div style='font-size:32px;font-weight:900;color:" + skc + ";'>" + str(score) + "</div>")
+    s("<div style='font-size:10px;color:#94a3b8;'>/ 100</div></div>")
+    s("<div class='card' style='text-align:center;'><div class='lbl'>타이머</div>")
+    s("<div style='font-size:28px;font-weight:900;color:#6366f1;font-family:monospace;'>" + tstr + "</div>")
+    s("<div style='font-size:10px;color:#94a3b8;'>" + ("공부중" if is_study else "휴식중") + "</div></div>")
+    s("<div class='card' style='text-align:center;'><div class='lbl'>불쾌지수</div>")
+    s("<div style='font-size:32px;font-weight:900;color:#f97316;'>" + str(round(di,1)) + "</div></div>")
+    s("</div>")
 
-    # 메인 그리드 (점수 / 게이지 / 타이머)
-    html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px;">'
+    c2c = "#f87171" if co2>=1000 else "#1e293b"
+    gc  = "#f87171" if gas>=25000 else "#1e293b"
+    s("<div class='g4' style='margin-bottom:10px;'>")
+    s("<div class='card'><div class='lbl'>CO2</div><div style='font-size:26px;font-weight:900;color:" + c2c + ";'>" + str(int(co2)) + "</div><div style='font-size:10px;color:#94a3b8;'>ppm</div></div>")
+    s("<div class='card'><div class='lbl'>온도</div><div style='font-size:26px;font-weight:900;color:#f97316;'>" + str(round(temp,1)) + "</div><div style='font-size:10px;color:#94a3b8;'>C</div></div>")
+    s("<div class='card'><div class='lbl'>습도</div><div style='font-size:26px;font-weight:900;color:#38bdf8;'>" + str(round(hum,1)) + "</div><div style='font-size:10px;color:#94a3b8;'>%</div></div>")
+    s("<div class='card'><div class='lbl'>가스</div><div style='font-size:20px;font-weight:900;color:" + gc + ";'>" + str(gas) + "</div></div>")
+    s("</div>")
 
-    # 집중력 점수
-    html += (
-        '<div class="card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:180px;">'
-        '<div class="label">집중력 점수</div>'
-        '<div class="score-ring" style="border-color:' + score_color + ';">'
-        '<span style="font-size:20px; font-weight:900;">' + score_emoji + '</span>'
-        '<span style="font-size:22px; font-weight:900; color:' + score_color + ';">' + str(score) + '점</span>'
-        '</div>'
-        '</div>'
-    )
+    s("<div class='card' style='margin-bottom:10px;'><div class='lbl'>날씨 선택</div>")
+    s("<div class='g4' style='margin-top:8px;'>" + wbtns + "</div></div>")
 
-    # 불쾌지수 게이지
-    html += (
-        '<div class="card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:180px;">'
-        '<div class="label">불쾌지수 (DI)</div>'
-        '<div style="display:flex; align-items:center; gap:16px; margin-top:12px;">'
-        '<div style="display:flex; flex-direction:column; justify-content:space-between; height:200px; font-size:10px; color:#cbd5e1; text-align:right;">'
-        '<span>85</span><span>75</span><span>68</span><span>60</span>'
-        '</div>'
-        '<div class="gauge-wrap">'
-        '<div class="gauge-needle" style="top:' + str(pointer_px) + 'px;">'
-        '<span style="color:#1e293b; font-size:10px;">&#9664;</span>'
-        '<span style="font-weight:900; font-size:15px; color:#1e293b;">' + str(round(di, 1)) + '</span>'
-        '</div>'
-        '</div>'
-        '</div>'
-        '</div>'
-    )
+    s("<div class='card' style='background:" + rc + "11;border:1.5px solid " + rc + "44;margin-bottom:10px;'>")
+    s("<div class='lbl'>환기 예측</div>")
+    s("<p style='font-weight:700;color:" + rc + ";margin-top:4px;'>" + rt + "</p>")
+    s("<p style='font-size:10px;color:#94a3b8;margin-top:4px;'>1차 감쇄 공식 기반</p></div>")
 
-    # 타이머
-    html += (
-        '<div class="card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:180px;">'
-        '<div class="label">' + study_label + '</div>'
-        '<div style="font-size:44px; font-weight:900; color:#6366f1; font-family:monospace; margin-top:8px;">'
-        + timer_str +
-        '</div>'
-        '<div style="font-size:11px; color:#94a3b8; margin-top:8px;">' + time_label + '</div>'
-        '</div>'
-    )
+    s("<div class='card'><div class='lbl'>CO2 그래프</div>")
+    s("<div style='display:flex;align-items:flex-end;height:90px;margin-top:8px;'>")
+    if bars: s(bars)
+    else: s("<p style='color:#94a3b8;font-size:11px;'>데이터 수집 중...</p>")
+    s("</div><div style='font-size:10px;color:#f87171;margin-top:4px;'>--- 1000ppm 기준</div></div>")
 
-    html += '</div>'  # 메인 그리드 끝
+    s("</div></body></html>")
 
-    # 센서 수치 그리드
-    html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; margin-bottom:16px;">'
 
-    html += (
-        '<div class="card">'
-        '<div class="label">CO2</div>'
-        '<div class="big-num" style="color:' + co2_color + ';">' + str(int(co2)) + '</div>'
-        '<div style="font-size:11px; color:#94a3b8; margin-top:4px;">ppm</div>'
-        '</div>'
-    )
-    html += (
-        '<div class="card">'
-        '<div class="label">온도</div>'
-        '<div class="big-num" style="color:#f97316;">' + str(round(temp, 1)) + '</div>'
-        '<div style="font-size:11px; color:#94a3b8; margin-top:4px;">°C</div>'
-        '</div>'
-    )
-    html += (
-        '<div class="card">'
-        '<div class="label">습도</div>'
-        '<div class="big-num" style="color:#38bdf8;">' + str(round(hum, 1)) + '</div>'
-        '<div style="font-size:11px; color:#94a3b8; margin-top:4px;">%</div>'
-        '</div>'
-    )
-    html += (
-        '<div class="card">'
-        '<div class="label">가스 MQ2</div>'
-        '<div class="big-num" style="color:' + gas_color + '; font-size:32px;">' + str(gas) + '</div>'
-        '</div>'
-    )
-
-    html += '</div>'  # 센서 그리드 끝
-
-    # 날씨 선택 (전체 너비)
-    html += (
-        '<div class="card" style="margin-bottom:16px;">'
-        '<div class="label">바깥 날씨 선택</div>'
-        '<div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; margin-top:12px;">'
-        + weather_buttons +
-        '</div>'
-        '</div>'
-    )
-
-    # 환기 회복 예측 (전체 너비)
-    html += (
-        '<div class="card" style="background:' + recovery_color + '11; border:1.5px solid ' + recovery_color + '44; margin-bottom:16px;">'
-        '<div class="label">환기 회복 예측</div>'
-        '<p style="font-weight:700; font-size:16px; color:' + recovery_color + '; margin-top:10px;">' + recovery_text + '</p>'
-        '<p style="font-size:11px; color:#94a3b8; margin-top:8px; line-height:1.6;">'
-        '물질전달 1차 감쇄 공식 기반<br>(목표: 1,000ppm / 외부: 400ppm)'
-        '</p>'
-        '</div>'
-    )
-
-    # CO2 그래프
-    html += (
-        '<div class="card">'
-        '<div class="label">CO2 실시간 변화 그래프</div>'
-        '<canvas id="co2Chart" height="70" style="margin-top:12px;"></canvas>'
-        '</div>'
-        '</div>'
-    )
-
-    # 자바스크립트
-    html += """
-<script>
-var co2Data  = """ + co2_data + """;
-var timeData = """ + time_data + """;
-var ctx = document.getElementById('co2Chart').getContext('2d');
-new Chart(ctx, {
-  type: 'line',
-  data: {
-    labels: timeData.map(function(t){ return t + '초'; }),
-    datasets: [
-      {
-        label: 'CO2 (ppm)',
-        data: co2Data,
-        borderColor: '#6366f1',
-        backgroundColor: 'rgba(99,102,241,0.08)',
-        borderWidth: 2.5,
-        pointRadius: 4,
-        pointBackgroundColor: '#6366f1',
-        tension: 0.4,
-        fill: true
-      },
-      {
-        label: '경고 기준 (1000ppm)',
-        data: co2Data.map(function(){ return 1000; }),
-        borderColor: '#f87171',
-        borderWidth: 1.5,
-        borderDash: [6, 4],
-        pointRadius: 0,
-        fill: false
-      }
-    ]
-  },
-  options: {
-    responsive: true,
-    plugins: {
-      legend: {
-        labels: { color: '#64748b', font: { size: 11, weight: 'bold' } }
-      }
-    },
-    scales: {
-      x: {
-        ticks: { color: '#94a3b8', maxTicksLimit: 8 },
-        grid:  { color: '#f1f5f9' }
-      },
-      y: {
-        ticks: { color: '#94a3b8' },
-        grid:  { color: '#f1f5f9' },
-        min: 300,
-        suggestedMax: 1500
-      }
-    }
-  }
-});
-</script>
-</body></html>"""
-
-    return html
-
-# ==========================================================
-# 10. 웹서버 실행
-# ==========================================================
-s = socket.socket()
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(('', 80))
-s.listen(5)
-s.setblocking(False)
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(('', 80))
+srv.listen(3)
+srv.setblocking(False)
 print("웹서버 실행 중...")
 
 while True:
     update_sensors()
     try:
-        conn, addr = s.accept()
-        conn.settimeout(2.0)
+        conn, addr = srv.accept()
+        conn.settimeout(3.0)
+        print("접속:", addr)
+        request = ""
         try:
             request = conn.recv(1024).decode()
-
-            if   "?w=sunny" in request: selected_weather = "sunny"
-            elif "?w=dusty" in request: selected_weather = "dusty"
-            elif "?w=rainy" in request: selected_weather = "rainy"
-            elif "?w=snow"  in request: selected_weather = "snow"
-
-            elapsed   = time.ticks_diff(time.ticks_ms(), prev_ms)
-            rem       = max(0, ((STUDY_TIME if is_study else STRETCH_TIME) - elapsed) // 1000)
-            mm        = int(rem // 60)
-            ss        = int(rem % 60)
-            timer_str = str(mm).zfill(2) + ":" + str(ss).zfill(2)
-
-            pointer_px = int(200 - ((di - 60) * (200 / 25))) - 12
-            pointer_px = max(-12, min(188, pointer_px))
-
-            recovery_min = calc_recovery_time(co2)
-
-            bad = (di >= 75.0 or co2 >= 1000 or gas >= 25000)
-            if not is_study:
-                guide = "자리에서 일어나 몸을 움직이세요! 10분 후 공부 시간이 시작돼요."
-            elif bad:
-                if   selected_weather == "sunny": guide = "창문을 활짝 열어 환기하세요!"
-                elif selected_weather == "dusty": guide = "창문은 1cm만 열고 에어컨을 켜세요!"
-                elif selected_weather == "rainy": guide = "창문을 닫고 에어컨 제습 모드를 켜세요!"
-                elif selected_weather == "snow":  guide = "2분만 짧게 환기하고 문을 닫으세요!"
-                else:                             guide = "창문을 활짝 열어 환기하세요!"
-            else:
-                guide = "최적의 공부 환경이에요! 이 상태를 유지해보세요"
-
-            html = get_html(di, co2, gas, temp, hum, timer_str, guide,
-                           selected_weather, pointer_px, recovery_min, is_study)
-            conn.send("HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n")
-            conn.send(html)
         except:
             pass
+        if "?w=sunny" in request: sel_weather = "sunny"
+        elif "?w=dusty" in request: sel_weather = "dusty"
+        elif "?w=rainy" in request: sel_weather = "rainy"
+        elif "?w=snow" in request: sel_weather = "snow"
+        try:
+            send_page(conn)
+        except Exception as e:
+            print("전송오류:", e)
         conn.close()
     except:
         pass
