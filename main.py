@@ -4,7 +4,6 @@ import struct
 import network
 import socket
 import math
-from neopixel import NeoPixel
 
 class SCD30:
     def __init__(self, i2c, addr=0x61):
@@ -56,8 +55,6 @@ class SCD30:
 
 i2c_bus    = machine.I2C(0, sda=machine.Pin(8), scl=machine.Pin(9), freq=50000)
 mq2_sensor = machine.ADC(26)
-NUM_LEDS   = 10
-np         = NeoPixel(machine.Pin(16), NUM_LEDS)
 sensor     = SCD30(i2c_bus)
 sensor.start()
 
@@ -101,21 +98,6 @@ def fmt_time(sec):
     ss2 = "0" + str(ss) if ss < 10 else str(ss)
     return ms + ":" + ss2
 
-def update_led(di, co2, gas, is_study):
-    now = time.ticks_ms()
-    if not is_study:
-        val = 150 if (now // 300) % 2 == 0 else 0
-        for i in range(NUM_LEDS): np[i] = (0, 0, val)
-    elif di >= 80 or co2 >= 1500 or gas >= 25000:
-        val = 150 if (now // 150) % 2 == 0 else 0
-        for i in range(NUM_LEDS): np[i] = (val, 0, 0)
-    elif di >= 75 or co2 >= 1000:
-        val = 120 if (now // 500) % 2 == 0 else 0
-        for i in range(NUM_LEDS): np[i] = (val, val, 0)
-    else:
-        for i in range(NUM_LEDS): np[i] = (0, 100, 0)
-    np.write()
-
 def update_sensors():
     global co2, temp, hum, di, gas, is_study, prev_ms, co2_hist
     now = time.ticks_ms()
@@ -132,7 +114,6 @@ def update_sensors():
         is_study = False; prev_ms = now
     elif not is_study and e >= STRETCH_TIME:
         is_study = True; prev_ms = now
-    update_led(di, co2, gas, is_study)
 
 def calc_recovery(c):
     if c <= 1000: return 0
@@ -185,10 +166,10 @@ def send_page(conn):
             c = "#f87171" if v>=1000 else ("#fbbf24" if v>=800 else "#6366f1")
             bars += "<div style='flex:1;background:" + c + ";height:" + str(h) + "px;border-radius:2px 2px 0 0;margin:0 1px;'></div>"
 
-    wlist = [("sunny","sunny","맑음"),("dusty","dusty","황사"),("rainy","rainy","비"),("snow","snow","눈")]
     wicons = {"sunny":"☀","dusty":"😷","rainy":"🌧","snow":"❄"}
+    wlist = [("sunny","맑음"),("dusty","황사"),("rainy","비"),("snow","눈")]
     wbtns = ""
-    for k, _, lb in wlist:
+    for k, lb in wlist:
         bg = "#ecfdf5" if k==sel_weather else "#f8fafc"
         bd = "#34d399" if k==sel_weather else "#e2e8f0"
         wbtns += "<a href='/?w=" + k + "' style='background:" + bg + ";border:2px solid " + bd + ";border-radius:12px;padding:8px;text-align:center;text-decoration:none;font-size:12px;font-weight:700;color:#1e293b;display:block;'>" + wicons[k] + "<br>" + lb + "</a>"
